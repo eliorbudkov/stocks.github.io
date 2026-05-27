@@ -301,154 +301,252 @@ $('range').addEventListener('change', load);
   $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') renderMAs(); });
 });
 
+// expose for the script-version check (not used otherwise)
+window.__stocksAppVersion = 7;
+
 // --- Drawing (trend lines on price chart) ---
-const SVG_NS = 'http://www.w3.org/2000/svg';
-const drawnLines = [];          // [{ t1, p1, t2, p2 }]
+// Approach: use Lightweight Charts' own line series — chart handles all
+// time/price coordinate math internally and re-renders on pan/zoom.
+const drawnSeries = [];   // array of LineSeries instances added to the chart
 let drawMode = false;
-let firstPt = null;             // { time, price }
-let cursorPt = null;            // { x, y } for preview rubber-band
+let firstPt = null;       // { time, price } of first click
 
 function setDrawMode(on) {
   drawMode = on;
   firstPt = null;
-  cursorPt = null;
   $('drawBtn').classList.toggle('active', on);
   $('chartWrap').classList.toggle('drawing', on);
-  renderLines();
+  // While drawing, disable pan/zoom so a click isn't interpreted as a drag
+  priceChart.applyOptions({
+    handleScroll: !on,
+    handleScale: !on,
+  });
 }
 
-function pixelToTimePrice(x, y) {
-  let time = priceChart.timeScale().coordinateToTime(x);
-  // If outside data range, snap to nearest known bar so the line still anchors
-  if (time == null && lastData && lastData.rows.length) {
-    const logical = priceChart.timeScale().coordinateToLogical(x);
-    if (logical != null) {
-      const rows = lastData.rows;
-      const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
-      time = rows[idx].time;
-    }
+function pickPrice(param) {
+  // Try the y→price conversion first
+  if (param.point) {
+    const p = candleSeries.coordinateToPrice(param.point.y);
+    if (p != null) return p;
   }
-  const price = candleSeries.coordinateToPrice(y);
-  if (time == null || price == null) return null;
-  return { time, price };
+  // Fallback to the close at the clicked bar
+  const sd = param.seriesData?.get(candleSeries);
+  if (sd && sd.close != null) return sd.close;
+  return null;
 }
 
-function chartRelative(e) {
-  const chartEl = $('priceChart');
-  const rect = chartEl.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-  const inside = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height;
-  return { x, y, inside };
-}
-
-function handleDrawClick(e) {
+priceChart.subscribeClick((param) => {
   if (!drawMode) return;
-  const { x, y, inside } = chartRelative(e);
-  if (!inside) return;
-  const pt = pixelToTimePrice(x, y);
-  if (!pt) return;
-
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+  if (param.time == null) return;
+  const price = pickPrice(param);
+  if (price == null) return;
 
   if (!firstPt) {
-    firstPt = { time: pt.time, price: pt.price };
-    cursorPt = { x, y };
-    renderLines();
+    firstPt = { time: param.time, price };
   } else {
-    drawnLines.push({ t1: firstPt.time, p1: firstPt.price, t2: pt.time, p2: pt.price });
+    const series = priceChart.addLineSeries({
+      color: '#2f81f7',
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    const pts = [
+      { time: firstPt.time, value: firstPt.price },
+      { time: param.time, value: price },
+    ].sort((a, b) => a.time - b.time);
+    series.setData(pts);
+    drawnSeries.push(series);
     setDrawMode(false);
   }
-}
-
-function handleDrawMove(e) {
-  if (!drawMode || !firstPt) return;
-  const { x, y, inside } = chartRelative(e);
-  if (!inside) return;
-  cursorPt = { x, y };
-  renderLines();
-}
-
-// Attach at document level with capture phase — guarantees we see the event
-// before any chart-internal handler can call setPointerCapture or stopPropagation.
-document.addEventListener('pointerdown', handleDrawClick, { capture: true });
-document.addEventListener('pointermove', handleDrawMove, { capture: true });
-// Also block click+mousedown while in draw mode so the chart doesn't react
-['click', 'mousedown', 'touchstart'].forEach(type => {
-  document.addEventListener(type, (e) => {
-    if (!drawMode) return;
-    const { inside } = chartRelative(e);
-    if (!inside) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-  }, { capture: true });
 });
-
-function renderLines() {
-  const svg = $('drawOverlay');
-  const chartEl = $('priceChart');
-  const w = chartEl.clientWidth;
-  const h = chartEl.clientHeight;
-  svg.setAttribute('width', w);
-  svg.setAttribute('height', h);
-  // Clear
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-
-  const ts = priceChart.timeScale();
-
-  for (const ln of drawnLines) {
-    const x1 = ts.timeToCoordinate(ln.t1);
-    const x2 = ts.timeToCoordinate(ln.t2);
-    const y1 = candleSeries.priceToCoordinate(ln.p1);
-    const y2 = candleSeries.priceToCoordinate(ln.p2);
-    if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
-    appendLine(svg, x1, y1, x2, y2, false);
-  }
-
-  // Preview line from firstPt to cursor while drawing
-  if (drawMode && firstPt && cursorPt) {
-    const x1 = ts.timeToCoordinate(firstPt.time);
-    const y1 = candleSeries.priceToCoordinate(firstPt.price);
-    if (x1 != null && y1 != null) {
-      appendLine(svg, x1, y1, cursorPt.x, cursorPt.y, true);
-    }
-  }
-}
-
-function appendLine(svg, x1, y1, x2, y2, preview) {
-  const ln = document.createElementNS(SVG_NS, 'line');
-  ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
-  ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
-  if (preview) ln.setAttribute('class', 'preview');
-  svg.appendChild(ln);
-  // Endpoints for non-preview lines
-  if (!preview) {
-    for (const [cx, cy] of [[x1, y1], [x2, y2]]) {
-      const c = document.createElementNS(SVG_NS, 'circle');
-      c.setAttribute('cx', cx);
-      c.setAttribute('cy', cy);
-      c.setAttribute('r', 3);
-      c.setAttribute('class', 'endpoint');
-      svg.appendChild(c);
-    }
-  }
-}
-
-// Redraw lines on pan/zoom/resize
-priceChart.timeScale().subscribeVisibleLogicalRangeChange(renderLines);
-const origResizeCharts = resizeCharts;
-window.addEventListener('resize', () => setTimeout(renderLines, 60));
 
 $('drawBtn').addEventListener('click', () => setDrawMode(!drawMode));
 $('clearLinesBtn').addEventListener('click', () => {
-  drawnLines.length = 0;
+  for (const s of drawnSeries) {
+    try { priceChart.removeSeries(s); } catch {}
+  }
+  drawnSeries.length = 0;
   setDrawMode(false);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && drawMode) setDrawMode(false);
 });
+
+// =========================================================
+// WhatsApp Price Alerts
+// =========================================================
+const LS_PHONE = 'stocks.alerts.phone';
+const LS_ALERTS = 'stocks.alerts.list';
+
+let alerts = [];           // [{ id, ticker, price, direction, lastPrice, triggered }]
+let alertsTimer = null;
+const ALERT_INTERVAL_MS = 5 * 60 * 1000;  // 5 min
+
+function loadAlerts() {
+  try {
+    alerts = JSON.parse(localStorage.getItem(LS_ALERTS) || '[]');
+  } catch { alerts = []; }
+  const phone = localStorage.getItem(LS_PHONE) || '';
+  $('alertPhone').value = phone;
+  renderAlerts();
+}
+
+function saveAlerts() {
+  localStorage.setItem(LS_ALERTS, JSON.stringify(alerts));
+}
+
+function renderAlerts() {
+  const list = $('alertsList');
+  list.innerHTML = '';
+  if (alerts.length === 0) {
+    list.innerHTML = '<div class="alerts-empty">אין התראות פעילות</div>';
+    return;
+  }
+  for (const a of alerts) {
+    const row = document.createElement('div');
+    row.className = 'alert-item' + (a.triggered ? ' triggered' : '');
+    const dirText = a.direction === 'above' ? '↑ מעל' : '↓ מתחת';
+    const dirClass = a.direction === 'above' ? 'dir-up' : 'dir-down';
+    const last = a.lastPrice != null ? `· אחרון: ${a.lastPrice.toFixed(2)}` : '';
+    const trig = a.triggered ? ' · ✅ נורה' : '';
+    row.innerHTML = `
+      <div class="info">
+        <span class="sym">${a.ticker}</span>
+        <span class="${dirClass}">${dirText} ${a.price}</span>
+        <span class="last">${last}${trig}</span>
+      </div>
+      <div class="actions">
+        <button data-act="reset" data-id="${a.id}">איפוס</button>
+        <button data-act="del" data-id="${a.id}" class="del">מחק</button>
+      </div>
+    `;
+    list.appendChild(row);
+  }
+  list.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      const act = btn.dataset.act;
+      if (act === 'del') {
+        alerts = alerts.filter(a => a.id !== id);
+      } else if (act === 'reset') {
+        const a = alerts.find(x => x.id === id);
+        if (a) { a.triggered = false; a.lastPrice = null; }
+      }
+      saveAlerts();
+      renderAlerts();
+    });
+  });
+}
+
+function addAlert() {
+  const ticker = $('alertTicker').value.trim().toUpperCase();
+  const price = parseFloat($('alertPrice').value);
+  const direction = $('alertDir').value;
+  if (!ticker || !Number.isFinite(price)) {
+    alert('הזן סימול ומחיר תקינים');
+    return;
+  }
+  alerts.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    ticker, price, direction,
+    lastPrice: null, triggered: false,
+  });
+  saveAlerts();
+  renderAlerts();
+  $('alertTicker').value = '';
+  $('alertPrice').value = '';
+}
+
+async function fetchLastPrice(ticker) {
+  try {
+    const result = await fetchYahoo(ticker, '5d');
+    const q = result.indicators?.quote?.[0];
+    const closes = q?.close || [];
+    for (let i = closes.length - 1; i >= 0; i--) {
+      if (closes[i] != null) return closes[i];
+    }
+  } catch (e) {
+    console.warn('alert fetch failed', ticker, e);
+  }
+  return null;
+}
+
+function buildAlertMessage(a, curr) {
+  const dir = a.direction === 'above' ? 'מעל' : 'מתחת';
+  return `🔔 ${a.ticker} חצה ${dir} ${a.price}\nמחיר כעת: ${curr.toFixed(2)}\nזמן: ${new Date().toLocaleString('he-IL')}`;
+}
+
+function fireAlert(a, curr) {
+  const msg = buildAlertMessage(a, curr);
+  // Desktop notification
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { new Notification('התראת מניה', { body: msg }); } catch {}
+  }
+  // Open WhatsApp send link in new tab
+  const phone = ($('alertPhone').value || '').replace(/[^0-9]/g, '');
+  if (phone) {
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank');
+  }
+}
+
+async function checkAlerts() {
+  if (alerts.length === 0) {
+    $('autoInfo').textContent = '⏱ אין התראות לבדוק';
+    return;
+  }
+  $('autoInfo').textContent = '⏱ בודק כעת...';
+  // Unique tickers
+  const tickers = [...new Set(alerts.filter(a => !a.triggered).map(a => a.ticker))];
+  const prices = {};
+  for (const t of tickers) {
+    prices[t] = await fetchLastPrice(t);
+  }
+  let firedCount = 0;
+  for (const a of alerts) {
+    if (a.triggered) continue;
+    const curr = prices[a.ticker];
+    if (curr == null) continue;
+    const prev = a.lastPrice;
+    const cross =
+      (a.direction === 'above' && curr >= a.price && (prev == null || prev < a.price)) ||
+      (a.direction === 'below' && curr <= a.price && (prev == null || prev > a.price));
+    a.lastPrice = curr;
+    if (cross) {
+      a.triggered = true;
+      fireAlert(a, curr);
+      firedCount++;
+    }
+  }
+  saveAlerts();
+  renderAlerts();
+  const now = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+  $('autoInfo').textContent = `⏱ נבדק ב-${now}${firedCount ? ` · ${firedCount} ירו` : ''}`;
+}
+
+function startAlertsPolling() {
+  if (alertsTimer) clearInterval(alertsTimer);
+  alertsTimer = setInterval(checkAlerts, ALERT_INTERVAL_MS);
+}
+
+$('addAlertBtn').addEventListener('click', addAlert);
+$('alertPrice').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAlert(); });
+$('alertTicker').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAlert(); });
+$('alertPhone').addEventListener('change', () => {
+  localStorage.setItem(LS_PHONE, $('alertPhone').value.trim());
+});
+$('checkAlertsBtn').addEventListener('click', checkAlerts);
+$('enableNotifBtn').addEventListener('click', async () => {
+  if (!('Notification' in window)) {
+    alert('הדפדפן לא תומך בהתראות מסך');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  $('enableNotifBtn').textContent = perm === 'granted' ? '✓ הותר' : 'אפשר התראות מסך';
+});
+
+loadAlerts();
+startAlertsPolling();
 
 load();

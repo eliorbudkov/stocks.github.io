@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>סורק מניות - MA / Volume / RSI</title>
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=7" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -73,7 +73,6 @@
       </div>
       <div class="chart-wrap" id="chartWrap">
         <div id="priceChart"></div>
-        <svg id="drawOverlay" xmlns="http://www.w3.org/2000/svg"></svg>
       </div>
     </div>
     <div class="chart-box">
@@ -86,6 +85,36 @@
     </div>
   </div>
 
-  <script src="app.js?v=5"></script>
+  <div class="alerts-panel">
+    <div class="alerts-title">
+      <span>התראות וואטסאפ</span>
+      <span class="small">בדיקה אוטומטית כל 5 דקות בזמן שהאתר פתוח</span>
+    </div>
+    <div class="alerts-body">
+      <div class="alert-row">
+        <label>טלפון:</label>
+        <input id="alertPhone" class="alert-phone" placeholder="972501234567 (עם קוד מדינה, ללא +)" autocomplete="off" />
+      </div>
+      <div class="alert-row">
+        <input id="alertTicker" class="alert-ticker" placeholder="AAPL" autocomplete="off" />
+        <select id="alertDir">
+          <option value="above">חוצה מעל</option>
+          <option value="below">חוצה מתחת</option>
+        </select>
+        <input id="alertPrice" class="alert-price" type="number" step="0.01" placeholder="מחיר" />
+        <button id="addAlertBtn" class="add-alert" type="button">+ הוסף</button>
+      </div>
+      <div class="alerts-list" id="alertsList">
+        <div class="alerts-empty">אין התראות פעילות</div>
+      </div>
+      <div class="alerts-actions">
+        <button id="checkAlertsBtn" type="button">בדוק עכשיו</button>
+        <button id="enableNotifBtn" type="button">אפשר התראות מסך</button>
+        <span class="auto-info" id="autoInfo">⏱ —</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=7"></script>
 </body>
 </html>

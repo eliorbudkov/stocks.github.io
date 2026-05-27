@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>סורק מניות - MA / Volume / RSI</title>
-  <link rel="stylesheet" href="styles.css?v=7" />
+  <link rel="stylesheet" href="styles.css?v=9" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -73,6 +73,7 @@
       </div>
       <div class="chart-wrap" id="chartWrap">
         <div id="priceChart"></div>
+        <div id="drawCatcher"></div>
       </div>
     </div>
     <div class="chart-box">
@@ -82,6 +83,44 @@
     <div class="chart-box">
       <div class="chart-title">RSI (14)</div>
       <div id="rsiChart"></div>
+    </div>
+  </div>
+
+  <div class="scanner-panel">
+    <div class="alerts-title">
+      <span>סורק מניות בזמן אמת</span>
+      <span class="small">לחץ על שורה כדי לטעון לגרף · נתונים מ-Yahoo (השהיה ~15 דקות)</span>
+    </div>
+    <div class="scanner-controls">
+      <input id="scannerTicker" placeholder="AAPL" autocomplete="off" />
+      <button id="scannerAdd" type="button">+ הוסף</button>
+      <select id="scannerInterval">
+        <option value="15000">כל 15 שניות</option>
+        <option value="30000" selected>כל 30 שניות</option>
+        <option value="60000">כל דקה</option>
+        <option value="300000">כל 5 דקות</option>
+      </select>
+      <button id="scannerStart" type="button">⏵ הפעל</button>
+      <button id="scannerStop" type="button" style="display:none;">⏸ עצור</button>
+      <span class="spacer"></span>
+      <span class="last-update" id="scannerLastUpdate">לא פעיל</span>
+    </div>
+    <div class="scanner-table-wrap">
+      <table id="scannerTable">
+        <thead>
+          <tr>
+            <th data-sort="ticker">סימול</th>
+            <th data-sort="price">מחיר</th>
+            <th data-sort="changePct">שינוי %</th>
+            <th data-sort="rsi">RSI</th>
+            <th data-sort="ma50">MA50</th>
+            <th data-sort="ma200">MA200</th>
+            <th class="col-vol" data-sort="volume">נפח</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="scannerBody"></tbody>
+      </table>
     </div>
   </div>
 
@@ -115,6 +154,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

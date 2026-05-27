@@ -302,64 +302,109 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 7;
+window.__stocksAppVersion = 9;
 
 // --- Drawing (trend lines on price chart) ---
-// Approach: use Lightweight Charts' own line series — chart handles all
-// time/price coordinate math internally and re-renders on pan/zoom.
-const drawnSeries = [];   // array of LineSeries instances added to the chart
+// Approach:
+// 1. Transparent overlay (#drawCatcher) covers the chart only while in draw mode
+//    so clicks land on us, not on the chart (no event-flow shenanigans).
+// 2. Lines are drawn using the chart's own line series, so the chart handles
+//    time/price → pixel rendering and the line stays anchored on pan/zoom.
+// 3. Click coordinates are converted to (time, price) using the chart's APIs
+//    with manual fallbacks based on the raw data, in case the APIs return null.
+const drawnSeries = [];
 let drawMode = false;
-let firstPt = null;       // { time, price } of first click
+let firstPt = null;
 
 function setDrawMode(on) {
   drawMode = on;
   firstPt = null;
   $('drawBtn').classList.toggle('active', on);
   $('chartWrap').classList.toggle('drawing', on);
-  // While drawing, disable pan/zoom so a click isn't interpreted as a drag
-  priceChart.applyOptions({
-    handleScroll: !on,
-    handleScale: !on,
-  });
 }
 
-function pickPrice(param) {
-  // Try the y→price conversion first
-  if (param.point) {
-    const p = candleSeries.coordinateToPrice(param.point.y);
-    if (p != null) return p;
+// Convert pixel x within the chart → time, with fallback
+function pxToTime(x) {
+  let t = priceChart.timeScale().coordinateToTime(x);
+  if (t != null) return t;
+  // Fallback A: logical → row time
+  const logical = priceChart.timeScale().coordinateToLogical(x);
+  if (logical != null && lastData) {
+    const rows = lastData.rows;
+    const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
+    return rows[idx].time;
   }
-  // Fallback to the close at the clicked bar
-  const sd = param.seriesData?.get(candleSeries);
-  if (sd && sd.close != null) return sd.close;
-  return null;
+  // Fallback B: linear interpolation across visible bars
+  if (!lastData) return null;
+  const rect = $('priceChart').getBoundingClientRect();
+  const priceScaleW = priceChart.priceScale('right').width() || 60;
+  const usableW = Math.max(1, rect.width - priceScaleW);
+  const rows = lastData.rows;
+  const showFrom = lastData.showFrom || 0;
+  const visCount = Math.max(1, rows.length - showFrom);
+  const ratio = Math.max(0, Math.min(1, x / usableW));
+  const idx = Math.round(ratio * (visCount - 1));
+  return rows[showFrom + idx].time;
 }
 
-priceChart.subscribeClick((param) => {
-  if (!drawMode) return;
-  if (param.time == null) return;
-  const price = pickPrice(param);
-  if (price == null) return;
+// Convert pixel y → price, with fallback
+function pxToPrice(y) {
+  let p = candleSeries.coordinateToPrice(y);
+  if (p != null) return p;
+  // Fallback: derive from visible price range with ~10% padding
+  if (!lastData) return null;
+  const rect = $('priceChart').getBoundingClientRect();
+  const rows = lastData.rows;
+  const showFrom = lastData.showFrom || 0;
+  let pMin = Infinity, pMax = -Infinity;
+  for (let i = showFrom; i < rows.length; i++) {
+    if (rows[i].low < pMin) pMin = rows[i].low;
+    if (rows[i].high > pMax) pMax = rows[i].high;
+  }
+  if (!isFinite(pMin) || !isFinite(pMax)) return null;
+  const pad = (pMax - pMin) * 0.05;
+  const top = pMax + pad;
+  const bot = pMin - pad;
+  const ratio = Math.max(0, Math.min(1, y / rect.height));
+  return top - ratio * (top - bot);
+}
 
+function commitLine(t1, p1, t2, p2) {
+  const series = priceChart.addLineSeries({
+    color: '#2f81f7',
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  });
+  const pts = [
+    { time: t1, value: p1 },
+    { time: t2, value: p2 },
+  ].sort((a, b) => a.time - b.time);
+  series.setData(pts);
+  drawnSeries.push(series);
+}
+
+function handleCatcherClick(e) {
+  const chartEl = $('priceChart');
+  const rect = chartEl.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const time = pxToTime(x);
+  const price = pxToPrice(y);
+  if (time == null || price == null) return;
   if (!firstPt) {
-    firstPt = { time: param.time, price };
+    firstPt = { time, price };
   } else {
-    const series = priceChart.addLineSeries({
-      color: '#2f81f7',
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-    });
-    const pts = [
-      { time: firstPt.time, value: firstPt.price },
-      { time: param.time, value: price },
-    ].sort((a, b) => a.time - b.time);
-    series.setData(pts);
-    drawnSeries.push(series);
+    commitLine(firstPt.time, firstPt.price, time, price);
     setDrawMode(false);
   }
-});
+}
+
+const catcher = $('drawCatcher');
+catcher.addEventListener('pointerdown', handleCatcherClick);
+// Block default touch behavior (scroll) while drawing
+catcher.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
 
 $('drawBtn').addEventListener('click', () => setDrawMode(!drawMode));
 $('clearLinesBtn').addEventListener('click', () => {
@@ -548,5 +593,224 @@ $('enableNotifBtn').addEventListener('click', async () => {
 
 loadAlerts();
 startAlertsPolling();
+
+// =========================================================
+// Real-time scanner
+// =========================================================
+const LS_WATCHLIST = 'stocks.scanner.watchlist';
+let scannerWatchlist = [];
+const scannerData = {};   // ticker -> { price, prev, change, changePct, rsi, ma50, ma200, volume, updated, error }
+let scannerTimer = null;
+let scannerActive = false;
+let scannerIntervalMs = 30000;
+let scannerSortKey = 'ticker';
+let scannerSortDir = 1;   // 1 = asc, -1 = desc
+
+function loadWatchlist() {
+  try { scannerWatchlist = JSON.parse(localStorage.getItem(LS_WATCHLIST) || '[]'); }
+  catch { scannerWatchlist = []; }
+}
+function saveWatchlist() {
+  localStorage.setItem(LS_WATCHLIST, JSON.stringify(scannerWatchlist));
+}
+
+function addToWatchlist(raw) {
+  const ticker = (raw || '').trim().toUpperCase();
+  if (!ticker) return;
+  if (scannerWatchlist.includes(ticker)) return;
+  scannerWatchlist.push(ticker);
+  saveWatchlist();
+  renderScanner();
+  fetchScannerTicker(ticker).then(renderScanner);
+}
+
+function removeFromWatchlist(ticker) {
+  scannerWatchlist = scannerWatchlist.filter(t => t !== ticker);
+  delete scannerData[ticker];
+  saveWatchlist();
+  renderScanner();
+}
+
+async function fetchScannerTicker(ticker) {
+  try {
+    const result = await fetchYahoo(ticker, '1y');
+    const q = result.indicators?.quote?.[0];
+    if (!q) throw new Error('אין נתונים');
+    const rawCloses = q.close || [];
+    const vols = q.volume || [];
+    // Filter nulls but keep paired with volume
+    const closes = [];
+    const volsAligned = [];
+    for (let i = 0; i < rawCloses.length; i++) {
+      if (rawCloses[i] == null) continue;
+      closes.push(rawCloses[i]);
+      volsAligned.push(vols[i] ?? 0);
+    }
+    if (closes.length < 2) throw new Error('מעט נתונים');
+    const last = closes[closes.length - 1];
+    const prev = closes[closes.length - 2];
+    const rsiArr = rsi(closes, 14);
+    const rsiVal = rsiArr[closes.length - 1];
+    const ma50Arr = sma(closes, 50);
+    const ma200Arr = sma(closes, 200);
+    scannerData[ticker] = {
+      price: last,
+      prev,
+      change: last - prev,
+      changePct: ((last - prev) / prev) * 100,
+      rsi: rsiVal,
+      ma50: ma50Arr[closes.length - 1],
+      ma200: ma200Arr[closes.length - 1],
+      volume: volsAligned[volsAligned.length - 1] || 0,
+      currency: result.meta?.currency || '',
+      updated: Date.now(),
+    };
+  } catch (e) {
+    scannerData[ticker] = { error: String(e.message || e), updated: Date.now() };
+  }
+}
+
+async function scanOnce() {
+  if (scannerWatchlist.length === 0) return;
+  $('scannerLastUpdate').textContent = 'מעדכן...';
+  // Throttled parallelism: batches of 3
+  for (let i = 0; i < scannerWatchlist.length; i += 3) {
+    const batch = scannerWatchlist.slice(i, i + 3);
+    await Promise.all(batch.map(fetchScannerTicker));
+    renderScanner();
+  }
+  const now = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  $('scannerLastUpdate').textContent = `עודכן ב-${now}`;
+}
+
+function startScanner() {
+  if (scannerActive) return;
+  scannerActive = true;
+  $('scannerStart').style.display = 'none';
+  $('scannerStop').style.display = '';
+  scanOnce();
+  scannerTimer = setInterval(scanOnce, scannerIntervalMs);
+}
+
+function stopScanner() {
+  scannerActive = false;
+  if (scannerTimer) { clearInterval(scannerTimer); scannerTimer = null; }
+  $('scannerStart').style.display = '';
+  $('scannerStop').style.display = 'none';
+  $('scannerLastUpdate').textContent = 'מושהה';
+}
+
+function sortedTickers() {
+  const arr = [...scannerWatchlist];
+  arr.sort((a, b) => {
+    if (scannerSortKey === 'ticker') {
+      return scannerSortDir * a.localeCompare(b);
+    }
+    const da = scannerData[a] || {};
+    const db = scannerData[b] || {};
+    const va = da[scannerSortKey];
+    const vb = db[scannerSortKey];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    return scannerSortDir * (va - vb);
+  });
+  return arr;
+}
+
+function renderScanner() {
+  const tbody = $('scannerBody');
+  // Update sort indicators
+  document.querySelectorAll('#scannerTable th[data-sort]').forEach(th => {
+    const isActive = th.dataset.sort === scannerSortKey;
+    th.innerHTML = th.textContent.replace(/^[▲▼]\s*/, '') ;
+    if (isActive) {
+      const arrow = scannerSortDir === 1 ? '▲' : '▼';
+      th.innerHTML = `<span class="sort-ind">${arrow}</span>${th.textContent}`;
+    }
+  });
+
+  if (scannerWatchlist.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="sc-empty">הוסף סימולים לרשימה (לדוגמה: AAPL, MSFT, TSLA, או TEVA.TA)</td></tr>';
+    return;
+  }
+
+  const tickers = sortedTickers();
+  tbody.innerHTML = '';
+  for (const t of tickers) {
+    const d = scannerData[t] || {};
+    const tr = document.createElement('tr');
+    tr.dataset.ticker = t;
+    if (d.error) {
+      tr.innerHTML = `<td class="sc-sym">${t}</td><td colspan="6" style="color:var(--red)">שגיאה: ${d.error}</td><td><button class="sc-del" data-t="${t}" type="button">✕</button></td>`;
+    } else if (d.price == null) {
+      tr.innerHTML = `<td class="sc-sym">${t}</td><td colspan="6" style="color:var(--text-soft)">טוען...</td><td><button class="sc-del" data-t="${t}" type="button">✕</button></td>`;
+    } else {
+      const dirCls = d.changePct >= 0 ? 'up' : 'down';
+      const dirSign = d.changePct >= 0 ? '+' : '';
+      const rsiCls = d.rsi >= 70 ? 'over' : d.rsi <= 30 ? 'under' : '';
+      const ma50Cls = d.price > d.ma50 ? 'above' : 'below';
+      const ma200Cls = d.price > d.ma200 ? 'above' : 'below';
+      const ma50Arrow = d.price > d.ma50 ? '↑' : '↓';
+      const ma200Arrow = d.price > d.ma200 ? '↑' : '↓';
+      tr.innerHTML = `
+        <td class="sc-sym">${t}</td>
+        <td>${fmt(d.price)}</td>
+        <td class="sc-change ${dirCls}">${dirSign}${fmt(d.changePct, 2)}%</td>
+        <td class="sc-rsi ${rsiCls}">${fmt(d.rsi, 1)}</td>
+        <td class="sc-ma ${ma50Cls}">${ma50Arrow} ${fmt(d.ma50)}</td>
+        <td class="sc-ma ${ma200Cls}">${ma200Arrow} ${fmt(d.ma200)}</td>
+        <td class="col-vol">${fmtVol(d.volume)}</td>
+        <td><button class="sc-del" data-t="${t}" type="button">✕</button></td>
+      `;
+    }
+    tbody.appendChild(tr);
+  }
+  // Wire up actions
+  tbody.querySelectorAll('button.sc-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFromWatchlist(btn.dataset.t);
+    });
+  });
+  tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+    tr.addEventListener('click', () => {
+      $('ticker').value = tr.dataset.ticker;
+      load();
+      document.querySelector('header').scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+}
+
+$('scannerAdd').addEventListener('click', () => {
+  addToWatchlist($('scannerTicker').value);
+  $('scannerTicker').value = '';
+});
+$('scannerTicker').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    addToWatchlist($('scannerTicker').value);
+    $('scannerTicker').value = '';
+  }
+});
+$('scannerStart').addEventListener('click', startScanner);
+$('scannerStop').addEventListener('click', stopScanner);
+$('scannerInterval').addEventListener('change', () => {
+  scannerIntervalMs = parseInt($('scannerInterval').value, 10) || 30000;
+  if (scannerActive) { stopScanner(); startScanner(); }
+});
+document.querySelectorAll('#scannerTable th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sort;
+    if (scannerSortKey === k) scannerSortDir = -scannerSortDir;
+    else { scannerSortKey = k; scannerSortDir = 1; }
+    renderScanner();
+  });
+});
+
+loadWatchlist();
+renderScanner();
+if (scannerWatchlist.length > 0) {
+  scanOnce();
+}
 
 load();

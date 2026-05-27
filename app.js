@@ -317,46 +317,58 @@ function setDrawMode(on) {
   renderLines();
 }
 
-function getClickTimePrice(param) {
-  if (!param || !param.point) return null;
-  const x = param.point.x;
-  const y = param.point.y;
-  // param.time may be null if clicking outside data range — use logical coord as fallback
-  let time = param.time;
-  if (time == null) {
-    const logical = param.logical;
-    if (logical == null) return null;
-    // approximate time from logical position
-    const data = lastData && lastData.rows;
-    if (!data) return null;
-    const idx = Math.round(logical);
-    if (idx < 0 || idx >= data.length) return null;
-    time = data[idx].time;
+function pixelToTimePrice(x, y) {
+  let time = priceChart.timeScale().coordinateToTime(x);
+  // If outside data range, snap to nearest known bar so the line still anchors
+  if (time == null && lastData && lastData.rows.length) {
+    const logical = priceChart.timeScale().coordinateToLogical(x);
+    if (logical != null) {
+      const rows = lastData.rows;
+      const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
+      time = rows[idx].time;
+    }
   }
   const price = candleSeries.coordinateToPrice(y);
-  if (price == null) return null;
-  return { time, price, x, y };
+  if (time == null || price == null) return null;
+  return { time, price };
 }
 
-priceChart.subscribeClick((param) => {
+function handleDrawClick(e) {
   if (!drawMode) return;
-  const pt = getClickTimePrice(param);
+  const chartEl = $('priceChart');
+  const rect = chartEl.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+  const pt = pixelToTimePrice(x, y);
   if (!pt) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
   if (!firstPt) {
     firstPt = { time: pt.time, price: pt.price };
-    cursorPt = { x: pt.x, y: pt.y };
+    cursorPt = { x, y };
     renderLines();
   } else {
     drawnLines.push({ t1: firstPt.time, p1: firstPt.price, t2: pt.time, p2: pt.price });
     setDrawMode(false);
   }
-});
+}
 
-priceChart.subscribeCrosshairMove((param) => {
-  if (!drawMode || !firstPt || !param.point) return;
-  cursorPt = { x: param.point.x, y: param.point.y };
+function handleDrawMove(e) {
+  if (!drawMode || !firstPt) return;
+  const chartEl = $('priceChart');
+  const rect = chartEl.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  cursorPt = { x, y };
   renderLines();
-});
+}
+
+// Attach in capture phase so we get the event before the chart's internal handlers
+$('chartWrap').addEventListener('pointerdown', handleDrawClick, { capture: true });
+$('chartWrap').addEventListener('pointermove', handleDrawMove, { capture: true });
 
 function renderLines() {
   const svg = $('drawOverlay');

@@ -333,18 +333,25 @@ function pixelToTimePrice(x, y) {
   return { time, price };
 }
 
-function handleDrawClick(e) {
-  if (!drawMode) return;
+function chartRelative(e) {
   const chartEl = $('priceChart');
   const rect = chartEl.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
+  const inside = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height;
+  return { x, y, inside };
+}
+
+function handleDrawClick(e) {
+  if (!drawMode) return;
+  const { x, y, inside } = chartRelative(e);
+  if (!inside) return;
   const pt = pixelToTimePrice(x, y);
   if (!pt) return;
 
   e.preventDefault();
   e.stopPropagation();
+  if (e.stopImmediatePropagation) e.stopImmediatePropagation();
 
   if (!firstPt) {
     firstPt = { time: pt.time, price: pt.price };
@@ -358,17 +365,27 @@ function handleDrawClick(e) {
 
 function handleDrawMove(e) {
   if (!drawMode || !firstPt) return;
-  const chartEl = $('priceChart');
-  const rect = chartEl.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const { x, y, inside } = chartRelative(e);
+  if (!inside) return;
   cursorPt = { x, y };
   renderLines();
 }
 
-// Attach in capture phase so we get the event before the chart's internal handlers
-$('chartWrap').addEventListener('pointerdown', handleDrawClick, { capture: true });
-$('chartWrap').addEventListener('pointermove', handleDrawMove, { capture: true });
+// Attach at document level with capture phase — guarantees we see the event
+// before any chart-internal handler can call setPointerCapture or stopPropagation.
+document.addEventListener('pointerdown', handleDrawClick, { capture: true });
+document.addEventListener('pointermove', handleDrawMove, { capture: true });
+// Also block click+mousedown while in draw mode so the chart doesn't react
+['click', 'mousedown', 'touchstart'].forEach(type => {
+  document.addEventListener(type, (e) => {
+    if (!drawMode) return;
+    const { inside } = chartRelative(e);
+    if (!inside) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+  }, { capture: true });
+});
 
 function renderLines() {
   const svg = $('drawOverlay');

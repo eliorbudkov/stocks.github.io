@@ -154,8 +154,87 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .up { color: var(--green); }
 .down { color: var(--red); }
 
-@media (max-width: 600px) {
-  input { width: 100px; }
-  header h1 { font-size: 16px; }
+/* ---------- Mobile (tablets + phones) ---------- */
+@media (max-width: 760px) {
+  header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  header h1 {
+    font-size: 16px;
+    width: 100%;
+  }
+  .controls {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+  input, select, button {
+    font-size: 13px;
+    padding: 7px 10px;
+  }
+  input#ticker {
+    width: 100px;
+    flex: 1 1 100px;
+    min-width: 80px;
+  }
+  select#range {
+    flex: 1 1 110px;
+    min-width: 100px;
+  }
+  .ma-group {
+    flex: 1 1 calc(33.333% - 6px);
+    justify-content: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 6px;
+    gap: 3px;
+  }
+  .ma-group label { display: none; }
+  .ma-swatch { width: 9px; height: 9px; }
+  .ma-arrow { font-size: 12px; width: 12px; }
+  input.ma-input {
+    width: 44px;
+    padding: 4px 2px;
+    font-size: 12px;
+    background: transparent;
+    border: none;
+  }
+  input.ma-input:focus { background: var(--bg); }
+  #loadBtn {
+    width: 100%;
+    padding: 10px;
+    margin-top: 2px;
+  }
+  .status {
+    padding: 6px 12px;
+    font-size: 12px;
+    min-height: 0;
+  }
+  .info-bar {
+    gap: 6px 12px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .info-bar .item { gap: 4px; }
+  .legend {
+    padding: 6px 12px;
+    font-size: 11px;
+    gap: 10px;
+  }
+  .charts { padding: 6px 8px 16px; }
+  .chart-title { padding: 5px 10px; font-size: 11px; }
   #priceChart { height: 320px; }
+  #volumeChart { height: 110px; }
+  #rsiChart { height: 130px; }
+}
+
+/* ---------- Small phones ---------- */
+@media (max-width: 380px) {
+  #priceChart { height: 280px; }
+  #volumeChart { height: 95px; }
+  #rsiChart { height: 110px; }
+  input.ma-input { width: 38px; }
+  .info-bar { font-size: 11px; }
 }

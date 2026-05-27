@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>סורק מניות - MA / Volume / RSI</title>
-  <link rel="stylesheet" href="styles.css?v=11" />
+  <link rel="stylesheet" href="styles.css?v=14" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -67,6 +67,25 @@
       <div class="chart-title">
         <span>מחיר + ממוצעים נעים</span>
         <div class="draw-tools">
+          <div class="color-dropdown" id="colorDropdown">
+            <button id="colorTrigger" type="button" class="tool-btn color-trigger" title="בחר צבע קו">
+              <span class="color-swatch" id="currentColorSwatch" style="background:#2f81f7"></span>
+              <span class="dropdown-arrow">▾</span>
+            </button>
+            <div class="color-menu" id="colorMenu" hidden>
+              <button class="color-option active" type="button" data-color="#2f81f7" title="כחול"><span class="color-swatch" style="background:#2f81f7"></span>כחול</button>
+              <button class="color-option" type="button" data-color="#ef5350" title="אדום"><span class="color-swatch" style="background:#ef5350"></span>אדום</button>
+              <button class="color-option" type="button" data-color="#26a69a" title="ירוק"><span class="color-swatch" style="background:#26a69a"></span>ירוק</button>
+              <button class="color-option" type="button" data-color="#f7b500" title="צהוב"><span class="color-swatch" style="background:#f7b500"></span>צהוב</button>
+              <button class="color-option" type="button" data-color="#ab47bc" title="סגול"><span class="color-swatch" style="background:#ab47bc"></span>סגול</button>
+              <button class="color-option" type="button" data-color="#ffffff" title="לבן"><span class="color-swatch" style="background:#ffffff"></span>לבן</button>
+              <label class="color-custom">
+                <span class="color-swatch" id="customSwatch" style="background:#2f81f7"></span>
+                <span>מותאם אישית</span>
+                <input type="color" id="drawColor" value="#2f81f7" />
+              </label>
+            </div>
+          </div>
           <button id="drawBtn" class="tool-btn" type="button" title="לחץ ואז בחר 2 נקודות על הגרף">✏️ קו</button>
           <button id="clearLinesBtn" class="tool-btn" type="button" title="מחק את כל הקווים">🗑 מחק</button>
         </div>
@@ -191,6 +210,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

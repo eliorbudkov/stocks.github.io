@@ -302,7 +302,7 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 11;
+window.__stocksAppVersion = 14;
 
 // --- Drawing (trend lines on price chart) ---
 // Architecture:
@@ -327,21 +327,96 @@ function setDrawMode(on) {
   renderLines();
 }
 
+// Derive a price for any y by linear extrapolation, using two valid samples
+// from the chart's own coordinateToPrice. This makes the price scale extend
+// above/below the data area (so a line can be closed above the top candle).
+function deriveYtoPrice(y) {
+  const rect = $('priceChart').getBoundingClientRect();
+  const h = rect.height;
+  let pa = null, ya = 0, pb = null, yb = 0;
+  for (const ratio of [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) {
+    const ty = h * ratio;
+    const p = candleSeries.coordinateToPrice(ty);
+    if (p != null) {
+      if (pa == null) { pa = p; ya = ty; }
+      else if (Math.abs(ty - ya) > 1) { pb = p; yb = ty; break; }
+    }
+  }
+  if (pa == null || pb == null) return null;
+  return pa + (y - ya) * (pb - pa) / (yb - ya);
+}
+
+// Same idea for time — when x falls outside the data range (e.g., right padding)
+function deriveXtoTime(x) {
+  const ts = priceChart.timeScale();
+  const logical = ts.coordinateToLogical(x);
+  if (logical == null || !lastData) return null;
+  const rows = lastData.rows;
+  const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
+  return rows[idx].time;
+}
+
 function clickPosToTimePrice(e) {
   const chartEl = $('priceChart');
   const rect = chartEl.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  const time = priceChart.timeScale().coordinateToTime(x);
-  const price = candleSeries.coordinateToPrice(y);
+  if (x < 0 || x > rect.width || y < 0 || y > rect.height) return null;
+  let time = priceChart.timeScale().coordinateToTime(x);
+  let price = candleSeries.coordinateToPrice(y);
+  if (time == null) time = deriveXtoTime(x);
+  if (price == null) price = deriveYtoPrice(y);
   if (time == null || price == null) return null;
   return { time, price, x, y };
 }
 
+function getDrawColor() {
+  return ($('drawColor') && $('drawColor').value) || '#2f81f7';
+}
+
+function updateColorUI(color) {
+  $('drawColor').value = color;
+  const sw = $('currentColorSwatch');
+  if (sw) sw.style.background = color;
+  const cs = $('customSwatch');
+  if (cs) cs.style.background = color;
+  document.querySelectorAll('#colorMenu .color-option').forEach(b => {
+    b.classList.toggle('active', b.dataset.color === color);
+  });
+}
+
+// Dropdown toggle
+$('colorTrigger').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = $('colorMenu');
+  menu.hidden = !menu.hidden;
+});
+// Close on outside click
+document.addEventListener('click', (e) => {
+  const dd = $('colorDropdown');
+  const menu = $('colorMenu');
+  if (!menu.hidden && !dd.contains(e.target)) menu.hidden = true;
+});
+// Color option selection
+document.querySelectorAll('#colorMenu .color-option').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const c = btn.dataset.color;
+    if (!c) return;
+    updateColorUI(c);
+    $('colorMenu').hidden = true;
+  });
+});
+// Custom color picker
+$('drawColor').addEventListener('input', () => {
+  updateColorUI($('drawColor').value);
+});
+$('drawColor').addEventListener('change', () => {
+  $('colorMenu').hidden = true;
+});
+
 function onCatcherDown(e) {
   const pt = clickPosToTimePrice(e);
   if (!pt) {
-    // Click outside data area — give brief feedback
     statusEl.textContent = 'לחץ בתוך אזור הנרות בגרף';
     return;
   }
@@ -350,7 +425,11 @@ function onCatcherDown(e) {
     cursorPx = { x: pt.x, y: pt.y };
     renderLines();
   } else {
-    drawnLines.push({ t1: firstPt.time, p1: firstPt.price, t2: pt.time, p2: pt.price });
+    drawnLines.push({
+      t1: firstPt.time, p1: firstPt.price,
+      t2: pt.time, p2: pt.price,
+      color: getDrawColor(),
+    });
     setDrawMode(false);
   }
 }
@@ -384,21 +463,29 @@ function renderLines() {
     const y1 = candleSeries.priceToCoordinate(ln.p1);
     const y2 = candleSeries.priceToCoordinate(ln.p2);
     if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
-    appendSvgLine(svg, x1, y1, x2, y2, false);
+    const color = ln.color || '#2f81f7';
+    appendSvgLine(svg, x1, y1, x2, y2, false, color);
+    appendPctLabel(svg, x1, y1, x2, y2, ln.p1, ln.p2);
   }
   if (drawMode && firstPt && cursorPx) {
     const x1 = ts.timeToCoordinate(firstPt.time);
     const y1 = candleSeries.priceToCoordinate(firstPt.price);
     if (x1 != null && y1 != null) {
-      appendSvgLine(svg, x1, y1, cursorPx.x, cursorPx.y, true);
+      appendSvgLine(svg, x1, y1, cursorPx.x, cursorPx.y, true, getDrawColor());
+      // Live percentage during draw — compute from end pixel
+      const liveP = candleSeries.coordinateToPrice(cursorPx.y) ?? deriveYtoPrice(cursorPx.y);
+      if (liveP != null) {
+        appendPctLabel(svg, x1, y1, cursorPx.x, cursorPx.y, firstPt.price, liveP);
+      }
     }
   }
 }
 
-function appendSvgLine(svg, x1, y1, x2, y2, preview) {
+function appendSvgLine(svg, x1, y1, x2, y2, preview, color) {
   const ln = document.createElementNS(SVG_NS, 'line');
   ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
   ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+  ln.setAttribute('stroke', color);
   if (preview) ln.setAttribute('class', 'preview');
   svg.appendChild(ln);
   if (!preview) {
@@ -407,10 +494,37 @@ function appendSvgLine(svg, x1, y1, x2, y2, preview) {
       c.setAttribute('cx', cx);
       c.setAttribute('cy', cy);
       c.setAttribute('r', 3);
+      c.setAttribute('fill', color);
       c.setAttribute('class', 'endpoint');
       svg.appendChild(c);
     }
   }
+}
+
+function appendPctLabel(svg, x1, y1, x2, y2, p1, p2) {
+  if (!isFinite(p1) || !isFinite(p2) || p1 === 0) return;
+  const pct = ((p2 - p1) / p1) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  const text = `${sign}${pct.toFixed(2)}%`;
+  const color = pct >= 0 ? '#26a69a' : '#ef5350';
+  // Position: a bit above the line's midpoint, offset perpendicular to its slope
+  const midX = (x1 + x2) / 2;
+  const midY = (y1 + y2) / 2;
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+  // Perpendicular unit vector pointing "up" (negative y)
+  let nx = -dy / len, ny = dx / len;
+  if (ny > 0) { nx = -nx; ny = -ny; }
+  const offset = 14;
+  const tx = midX + nx * offset;
+  const ty = midY + ny * offset;
+  const t = document.createElementNS(SVG_NS, 'text');
+  t.setAttribute('x', tx);
+  t.setAttribute('y', ty);
+  t.setAttribute('fill', color);
+  t.setAttribute('class', 'pct-label');
+  t.textContent = text;
+  svg.appendChild(t);
 }
 
 // Keep lines anchored on pan/zoom/resize

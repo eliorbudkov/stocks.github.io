@@ -302,7 +302,7 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 14;
+window.__stocksAppVersion = 15;
 
 // --- Drawing (trend lines on price chart) ---
 // Architecture:
@@ -346,14 +346,18 @@ function deriveYtoPrice(y) {
   return pa + (y - ya) * (pb - pa) / (yb - ya);
 }
 
-// Same idea for time — when x falls outside the data range (e.g., right padding)
+// Same idea for time — when x falls outside the data range (e.g., right padding).
+// IMPORTANT: the chart's logical index 0 corresponds to rows[showFrom], not rows[0],
+// because we only set the visible slice on the candle series. Without this offset,
+// the fallback returns a time from years ago and the line ends up off-screen.
 function deriveXtoTime(x) {
   const ts = priceChart.timeScale();
   const logical = ts.coordinateToLogical(x);
   if (logical == null || !lastData) return null;
   const rows = lastData.rows;
-  const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
-  return rows[idx].time;
+  const showFrom = lastData.showFrom || 0;
+  const fullIdx = Math.max(showFrom, Math.min(rows.length - 1, showFrom + Math.round(logical)));
+  return rows[fullIdx].time;
 }
 
 function clickPosToTimePrice(e) {

@@ -301,4 +301,125 @@ $('range').addEventListener('change', load);
   $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') renderMAs(); });
 });
 
+// --- Drawing (trend lines on price chart) ---
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const drawnLines = [];          // [{ t1, p1, t2, p2 }]
+let drawMode = false;
+let firstPt = null;             // { time, price }
+let cursorPt = null;            // { x, y } for preview rubber-band
+
+function setDrawMode(on) {
+  drawMode = on;
+  firstPt = null;
+  cursorPt = null;
+  $('drawBtn').classList.toggle('active', on);
+  $('chartWrap').classList.toggle('drawing', on);
+  renderLines();
+}
+
+function getClickTimePrice(param) {
+  if (!param || !param.point) return null;
+  const x = param.point.x;
+  const y = param.point.y;
+  // param.time may be null if clicking outside data range — use logical coord as fallback
+  let time = param.time;
+  if (time == null) {
+    const logical = param.logical;
+    if (logical == null) return null;
+    // approximate time from logical position
+    const data = lastData && lastData.rows;
+    if (!data) return null;
+    const idx = Math.round(logical);
+    if (idx < 0 || idx >= data.length) return null;
+    time = data[idx].time;
+  }
+  const price = candleSeries.coordinateToPrice(y);
+  if (price == null) return null;
+  return { time, price, x, y };
+}
+
+priceChart.subscribeClick((param) => {
+  if (!drawMode) return;
+  const pt = getClickTimePrice(param);
+  if (!pt) return;
+  if (!firstPt) {
+    firstPt = { time: pt.time, price: pt.price };
+    cursorPt = { x: pt.x, y: pt.y };
+    renderLines();
+  } else {
+    drawnLines.push({ t1: firstPt.time, p1: firstPt.price, t2: pt.time, p2: pt.price });
+    setDrawMode(false);
+  }
+});
+
+priceChart.subscribeCrosshairMove((param) => {
+  if (!drawMode || !firstPt || !param.point) return;
+  cursorPt = { x: param.point.x, y: param.point.y };
+  renderLines();
+});
+
+function renderLines() {
+  const svg = $('drawOverlay');
+  const chartEl = $('priceChart');
+  const w = chartEl.clientWidth;
+  const h = chartEl.clientHeight;
+  svg.setAttribute('width', w);
+  svg.setAttribute('height', h);
+  // Clear
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const ts = priceChart.timeScale();
+
+  for (const ln of drawnLines) {
+    const x1 = ts.timeToCoordinate(ln.t1);
+    const x2 = ts.timeToCoordinate(ln.t2);
+    const y1 = candleSeries.priceToCoordinate(ln.p1);
+    const y2 = candleSeries.priceToCoordinate(ln.p2);
+    if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+    appendLine(svg, x1, y1, x2, y2, false);
+  }
+
+  // Preview line from firstPt to cursor while drawing
+  if (drawMode && firstPt && cursorPt) {
+    const x1 = ts.timeToCoordinate(firstPt.time);
+    const y1 = candleSeries.priceToCoordinate(firstPt.price);
+    if (x1 != null && y1 != null) {
+      appendLine(svg, x1, y1, cursorPt.x, cursorPt.y, true);
+    }
+  }
+}
+
+function appendLine(svg, x1, y1, x2, y2, preview) {
+  const ln = document.createElementNS(SVG_NS, 'line');
+  ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+  ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+  if (preview) ln.setAttribute('class', 'preview');
+  svg.appendChild(ln);
+  // Endpoints for non-preview lines
+  if (!preview) {
+    for (const [cx, cy] of [[x1, y1], [x2, y2]]) {
+      const c = document.createElementNS(SVG_NS, 'circle');
+      c.setAttribute('cx', cx);
+      c.setAttribute('cy', cy);
+      c.setAttribute('r', 3);
+      c.setAttribute('class', 'endpoint');
+      svg.appendChild(c);
+    }
+  }
+}
+
+// Redraw lines on pan/zoom/resize
+priceChart.timeScale().subscribeVisibleLogicalRangeChange(renderLines);
+const origResizeCharts = resizeCharts;
+window.addEventListener('resize', () => setTimeout(renderLines, 60));
+
+$('drawBtn').addEventListener('click', () => setDrawMode(!drawMode));
+$('clearLinesBtn').addEventListener('click', () => {
+  drawnLines.length = 0;
+  setDrawMode(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawMode) setDrawMode(false);
+});
+
 load();

@@ -302,117 +302,126 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 10;
+window.__stocksAppVersion = 11;
 
 // --- Drawing (trend lines on price chart) ---
-// Approach:
-// 1. Transparent overlay (#drawCatcher) covers the chart only while in draw mode
-//    so clicks land on us, not on the chart (no event-flow shenanigans).
-// 2. Lines are drawn using the chart's own line series, so the chart handles
-//    time/price → pixel rendering and the line stays anchored on pan/zoom.
-// 3. Click coordinates are converted to (time, price) using the chart's APIs
-//    with manual fallbacks based on the raw data, in case the APIs return null.
-const drawnSeries = [];
+// Architecture:
+// 1. #drawCatcher overlay (z=10) catches all pointer events ONLY while in draw mode.
+// 2. Lines are stored as { t1, p1, t2, p2 } in `drawnLines`.
+// 3. Rendering is done via an SVG overlay (#drawOverlay, z=5) by converting
+//    each line's (time, price) back to pixels using the SAME chart APIs that
+//    were used to read the click — guaranteeing visual consistency.
+// 4. Re-render on every chart pan/zoom + resize so lines stay anchored.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const drawnLines = [];          // [{ t1, p1, t2, p2 }]
 let drawMode = false;
-let firstPt = null;
+let firstPt = null;             // { time, price }
+let cursorPx = null;            // { x, y } for preview line
 
 function setDrawMode(on) {
   drawMode = on;
   firstPt = null;
+  cursorPx = null;
   $('drawBtn').classList.toggle('active', on);
   $('chartWrap').classList.toggle('drawing', on);
+  renderLines();
 }
 
-// Convert pixel x within the chart → time, with fallback
-function pxToTime(x) {
-  let t = priceChart.timeScale().coordinateToTime(x);
-  if (t != null) return t;
-  // Fallback A: logical → row time
-  const logical = priceChart.timeScale().coordinateToLogical(x);
-  if (logical != null && lastData) {
-    const rows = lastData.rows;
-    const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
-    return rows[idx].time;
-  }
-  // Fallback B: linear interpolation across visible bars
-  if (!lastData) return null;
-  const rect = $('priceChart').getBoundingClientRect();
-  const priceScaleW = priceChart.priceScale('right').width() || 60;
-  const usableW = Math.max(1, rect.width - priceScaleW);
-  const rows = lastData.rows;
-  const showFrom = lastData.showFrom || 0;
-  const visCount = Math.max(1, rows.length - showFrom);
-  const ratio = Math.max(0, Math.min(1, x / usableW));
-  const idx = Math.round(ratio * (visCount - 1));
-  return rows[showFrom + idx].time;
-}
-
-// Convert pixel y → price, with fallback
-function pxToPrice(y) {
-  let p = candleSeries.coordinateToPrice(y);
-  if (p != null) return p;
-  // Fallback: derive from visible price range with ~10% padding
-  if (!lastData) return null;
-  const rect = $('priceChart').getBoundingClientRect();
-  const rows = lastData.rows;
-  const showFrom = lastData.showFrom || 0;
-  let pMin = Infinity, pMax = -Infinity;
-  for (let i = showFrom; i < rows.length; i++) {
-    if (rows[i].low < pMin) pMin = rows[i].low;
-    if (rows[i].high > pMax) pMax = rows[i].high;
-  }
-  if (!isFinite(pMin) || !isFinite(pMax)) return null;
-  const pad = (pMax - pMin) * 0.05;
-  const top = pMax + pad;
-  const bot = pMin - pad;
-  const ratio = Math.max(0, Math.min(1, y / rect.height));
-  return top - ratio * (top - bot);
-}
-
-function commitLine(t1, p1, t2, p2) {
-  const series = priceChart.addLineSeries({
-    color: '#2f81f7',
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-    crosshairMarkerVisible: false,
-  });
-  const pts = [
-    { time: t1, value: p1 },
-    { time: t2, value: p2 },
-  ].sort((a, b) => a.time - b.time);
-  series.setData(pts);
-  drawnSeries.push(series);
-}
-
-function handleCatcherClick(e) {
+function clickPosToTimePrice(e) {
   const chartEl = $('priceChart');
   const rect = chartEl.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  const time = pxToTime(x);
-  const price = pxToPrice(y);
-  if (time == null || price == null) return;
+  const time = priceChart.timeScale().coordinateToTime(x);
+  const price = candleSeries.coordinateToPrice(y);
+  if (time == null || price == null) return null;
+  return { time, price, x, y };
+}
+
+function onCatcherDown(e) {
+  const pt = clickPosToTimePrice(e);
+  if (!pt) {
+    // Click outside data area — give brief feedback
+    statusEl.textContent = 'לחץ בתוך אזור הנרות בגרף';
+    return;
+  }
   if (!firstPt) {
-    firstPt = { time, price };
+    firstPt = { time: pt.time, price: pt.price };
+    cursorPx = { x: pt.x, y: pt.y };
+    renderLines();
   } else {
-    commitLine(firstPt.time, firstPt.price, time, price);
+    drawnLines.push({ t1: firstPt.time, p1: firstPt.price, t2: pt.time, p2: pt.price });
     setDrawMode(false);
   }
 }
 
+function onCatcherMove(e) {
+  if (!firstPt) return;
+  const chartEl = $('priceChart');
+  const rect = chartEl.getBoundingClientRect();
+  cursorPx = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  renderLines();
+}
+
 const catcher = $('drawCatcher');
-catcher.addEventListener('pointerdown', handleCatcherClick);
-// Block default touch behavior (scroll) while drawing
+catcher.addEventListener('pointerdown', onCatcherDown);
+catcher.addEventListener('pointermove', onCatcherMove);
 catcher.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+
+function renderLines() {
+  const svg = $('drawOverlay');
+  const chartEl = $('priceChart');
+  const w = chartEl.clientWidth;
+  const h = chartEl.clientHeight;
+  svg.setAttribute('width', w);
+  svg.setAttribute('height', h);
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const ts = priceChart.timeScale();
+  for (const ln of drawnLines) {
+    const x1 = ts.timeToCoordinate(ln.t1);
+    const x2 = ts.timeToCoordinate(ln.t2);
+    const y1 = candleSeries.priceToCoordinate(ln.p1);
+    const y2 = candleSeries.priceToCoordinate(ln.p2);
+    if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+    appendSvgLine(svg, x1, y1, x2, y2, false);
+  }
+  if (drawMode && firstPt && cursorPx) {
+    const x1 = ts.timeToCoordinate(firstPt.time);
+    const y1 = candleSeries.priceToCoordinate(firstPt.price);
+    if (x1 != null && y1 != null) {
+      appendSvgLine(svg, x1, y1, cursorPx.x, cursorPx.y, true);
+    }
+  }
+}
+
+function appendSvgLine(svg, x1, y1, x2, y2, preview) {
+  const ln = document.createElementNS(SVG_NS, 'line');
+  ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+  ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+  if (preview) ln.setAttribute('class', 'preview');
+  svg.appendChild(ln);
+  if (!preview) {
+    for (const [cx, cy] of [[x1, y1], [x2, y2]]) {
+      const c = document.createElementNS(SVG_NS, 'circle');
+      c.setAttribute('cx', cx);
+      c.setAttribute('cy', cy);
+      c.setAttribute('r', 3);
+      c.setAttribute('class', 'endpoint');
+      svg.appendChild(c);
+    }
+  }
+}
+
+// Keep lines anchored on pan/zoom/resize
+priceChart.timeScale().subscribeVisibleLogicalRangeChange(renderLines);
+window.addEventListener('resize', () => setTimeout(renderLines, 80));
 
 $('drawBtn').addEventListener('click', () => setDrawMode(!drawMode));
 $('clearLinesBtn').addEventListener('click', () => {
-  for (const s of drawnSeries) {
-    try { priceChart.removeSeries(s); } catch {}
-  }
-  drawnSeries.length = 0;
+  drawnLines.length = 0;
   setDrawMode(false);
+  renderLines();
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && drawMode) setDrawMode(false);

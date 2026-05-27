@@ -302,7 +302,7 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 9;
+window.__stocksAppVersion = 10;
 
 // --- Drawing (trend lines on price chart) ---
 // Approach:
@@ -812,5 +812,129 @@ renderScanner();
 if (scannerWatchlist.length > 0) {
   scanOnce();
 }
+
+// =========================================================
+// Day Gainers / Losers screener (Yahoo predefined screeners)
+// =========================================================
+const screenerProxies = [
+  (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+  (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+];
+
+async function fetchYahooScreener(scrId, count = 100) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=${scrId}&count=${count}&lang=en-US&region=US`;
+  let lastErr;
+  for (const wrap of screenerProxies) {
+    try {
+      const r = await fetch(wrap(url));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      const result = j?.finance?.result?.[0];
+      if (!result) throw new Error('פורמט לא צפוי');
+      return result.quotes || [];
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('הסורק לא זמין');
+}
+
+function numVal(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'object' && 'raw' in v) return v.raw;
+  return null;
+}
+
+async function runScreener() {
+  const dir = $('screenerDir').value;
+  const threshold = parseFloat($('screenerThreshold').value) || 0;
+  const scrId = dir === 'up' ? 'day_gainers' : dir === 'down' ? 'day_losers' : 'most_actives';
+  const labelMap = { up: 'עליות', down: 'ירידות', active: 'פעילות' };
+
+  $('screenerStatus').textContent = `סורק ${labelMap[dir]}...`;
+  $('screenerRunBtn').disabled = true;
+  $('screenerCount').textContent = '';
+  $('screenerBody').innerHTML = '<tr><td colspan="6" class="sc-empty">טוען...</td></tr>';
+
+  try {
+    const quotes = await fetchYahooScreener(scrId, 100);
+    let filtered = quotes;
+    if (dir === 'up') {
+      filtered = quotes.filter(q => (numVal(q.regularMarketChangePercent) ?? 0) >= threshold);
+    } else if (dir === 'down') {
+      filtered = quotes.filter(q => (numVal(q.regularMarketChangePercent) ?? 0) <= -threshold);
+    }
+    // Sort: gainers desc, losers asc (most extreme first)
+    filtered.sort((a, b) => {
+      const pa = numVal(a.regularMarketChangePercent) ?? 0;
+      const pb = numVal(b.regularMarketChangePercent) ?? 0;
+      return dir === 'down' ? pa - pb : pb - pa;
+    });
+    renderScreenerResults(filtered, dir, threshold);
+    const now = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+    $('screenerStatus').textContent = `עודכן ב-${now}`;
+    $('screenerCount').textContent = `${filtered.length} מתוך ${quotes.length} עומדים בסף`;
+  } catch (e) {
+    $('screenerStatus').textContent = 'שגיאה: ' + (e.message || e);
+    $('screenerBody').innerHTML = '<tr><td colspan="6" class="sc-empty" style="color:var(--red)">לא הצלחנו לשלוף את הרשימה. נסה שוב.</td></tr>';
+  } finally {
+    $('screenerRunBtn').disabled = false;
+  }
+}
+
+function renderScreenerResults(quotes, dir, threshold) {
+  const tbody = $('screenerBody');
+  if (quotes.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="sc-empty">לא נמצאו מנייות שעומדות בסף ${threshold}%</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const q of quotes) {
+    const sym = q.symbol;
+    const name = q.shortName || q.longName || '';
+    const price = numVal(q.regularMarketPrice);
+    const pct = numVal(q.regularMarketChangePercent);
+    const vol = numVal(q.regularMarketVolume);
+    const dirCls = (pct ?? 0) >= 0 ? 'up' : 'down';
+    const dirSign = (pct ?? 0) >= 0 ? '+' : '';
+    const tr = document.createElement('tr');
+    tr.dataset.ticker = sym;
+    tr.innerHTML = `
+      <td class="sc-sym">${sym}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--text-soft)" title="${name}">${name}</td>
+      <td>${price != null ? fmt(price) : '-'}</td>
+      <td class="sc-change ${dirCls}">${pct != null ? dirSign + fmt(pct, 2) + '%' : '-'}</td>
+      <td class="col-vol">${vol != null ? fmtVol(vol) : '-'}</td>
+      <td><button class="sc-del" data-add="${sym}" type="button" title="הוסף לרשימת המעקב">+</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  // Wire row click → load into main chart
+  tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+    tr.addEventListener('click', () => {
+      $('ticker').value = tr.dataset.ticker;
+      load();
+      document.querySelector('header').scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+  // Wire + button → add to watchlist
+  tbody.querySelectorAll('button[data-add]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      addToWatchlist(btn.dataset.add);
+      btn.textContent = '✓';
+      btn.disabled = true;
+    });
+  });
+}
+
+$('screenerRunBtn').addEventListener('click', runScreener);
+$('screenerThreshold').addEventListener('keydown', (e) => { if (e.key === 'Enter') runScreener(); });
+$('screenerDir').addEventListener('change', () => {
+  // When switching to "active", threshold doesn't matter
+  $('screenerThreshold').disabled = $('screenerDir').value === 'active';
+});
 
 load();

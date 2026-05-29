@@ -303,6 +303,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #priceChart { height: 420px; }
 #volumeChart { height: 140px; }
 #rsiChart { height: 160px; }
+#atrChart { height: 160px; }
 
 .up { color: var(--green); }
 .down { color: var(--red); }
@@ -573,6 +574,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   #priceChart { height: 320px; }
   #volumeChart { height: 110px; }
   #rsiChart { height: 130px; }
+  #atrChart { height: 130px; }
 }
 
 /* ---------- Small phones ---------- */
@@ -580,6 +582,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   #priceChart { height: 280px; }
   #volumeChart { height: 95px; }
   #rsiChart { height: 110px; }
+  #atrChart { height: 110px; }
   input.ma-input { width: 38px; }
   .info-bar { font-size: 11px; }
 }

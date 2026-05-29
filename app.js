@@ -28,6 +28,10 @@ const rsiChart = LightweightCharts.createChart($('rsiChart'), {
   ...chartCommon,
   height: $('rsiChart').clientHeight,
 });
+const atrChart = LightweightCharts.createChart($('atrChart'), {
+  ...chartCommon,
+  height: $('atrChart').clientHeight,
+});
 
 const candleSeries = priceChart.addCandlestickSeries({
   upColor: '#26a69a', downColor: '#ef5350',
@@ -48,9 +52,11 @@ const rsiSeries = rsiChart.addLineSeries({ color: '#2f81f7', lineWidth: 2 });
 rsiSeries.createPriceLine({ price: 70, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '70' });
 rsiSeries.createPriceLine({ price: 30, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
 
-// Sync time scales across the 3 charts
+const atrSeries = atrChart.addLineSeries({ color: '#ff9800', lineWidth: 2, priceLineVisible: false });
+
+// Sync time scales across all charts
 function syncTimeScales() {
-  const charts = [priceChart, volumeChart, rsiChart];
+  const charts = [priceChart, volumeChart, rsiChart, atrChart];
   charts.forEach((src) => {
     src.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
@@ -64,6 +70,7 @@ function resizeCharts() {
   priceChart.applyOptions({ width: $('priceChart').clientWidth });
   volumeChart.applyOptions({ width: $('volumeChart').clientWidth });
   rsiChart.applyOptions({ width: $('rsiChart').clientWidth });
+  atrChart.applyOptions({ width: $('atrChart').clientWidth });
 }
 window.addEventListener('resize', resizeCharts);
 resizeCharts();
@@ -98,6 +105,31 @@ function rsi(closes, period = 14) {
     avgG = (avgG * (period - 1) + g) / period;
     avgL = (avgL * (period - 1) + l) / period;
     out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  }
+  return out;
+}
+
+// Average True Range (Wilder's smoothing). Input: array of {high, low, close}
+function atr(bars, period = 14) {
+  const out = new Array(bars.length).fill(null);
+  if (bars.length <= period) return out;
+  const tr = new Array(bars.length).fill(0);
+  for (let i = 0; i < bars.length; i++) {
+    if (i === 0) {
+      tr[i] = bars[i].high - bars[i].low;
+    } else {
+      const h = bars[i].high, l = bars[i].low, pc = bars[i - 1].close;
+      tr[i] = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+    }
+  }
+  // First ATR = simple average of first `period` true ranges (indices 1..period)
+  let sum = 0;
+  for (let i = 1; i <= period; i++) sum += tr[i];
+  let prev = sum / period;
+  out[period] = prev;
+  for (let i = period + 1; i < bars.length; i++) {
+    prev = (prev * (period - 1) + tr[i]) / period;
+    out[i] = prev;
   }
   return out;
 }
@@ -239,6 +271,7 @@ async function load() {
 
     const closeArr = rows.map(r => r.close);
     const rsiArr   = rsi(closeArr, 14);
+    const atrArr   = atr(rows, 14);
 
     // Slice display window — indicators are computed on full history for proper lookback
     const showFrom = cfg.show === Infinity ? 0 : Math.max(0, rows.length - cfg.show);
@@ -259,6 +292,7 @@ async function load() {
     candleSeries.setData(candles);
     volumeSeries.setData(vData);
     rsiSeries.setData(toLine(rsiArr));
+    atrSeries.setData(toLine(atrArr));
 
     lastData = { rows, closeArr, result, showFrom };
     renderMAs();
@@ -280,6 +314,9 @@ async function load() {
     const rsiEl = $('iRsi');
     rsiEl.textContent = fmt(rsiVal, 1);
     rsiEl.className = 'val ' + (rsiVal >= 70 ? 'down' : rsiVal <= 30 ? 'up' : '');
+    const atrVal = atrArr[last];
+    const atrPct = (atrVal != null && lastClose) ? (atrVal / lastClose) * 100 : null;
+    $('iAtr').textContent = atrVal != null ? `${fmt(atrVal)}${atrPct != null ? ` (${fmt(atrPct, 1)}%)` : ''}` : '-';
     infoBar.style.display = 'flex';
 
     const shown = rows.length - showFrom;
@@ -302,7 +339,7 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 15;
+window.__stocksAppVersion = 16;
 
 // --- Drawing (trend lines on price chart) ---
 // Architecture:

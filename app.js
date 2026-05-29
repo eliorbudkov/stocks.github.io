@@ -339,7 +339,7 @@ $('range').addEventListener('change', load);
 });
 
 // expose for the script-version check (not used otherwise)
-window.__stocksAppVersion = 16;
+window.__stocksAppVersion = 17;
 
 // --- Drawing (trend lines on price chart) ---
 // Architecture:
@@ -587,6 +587,7 @@ document.addEventListener('keydown', (e) => {
 // =========================================================
 const LS_PHONE = 'stocks.alerts.phone';
 const LS_ALERTS = 'stocks.alerts.list';
+const LS_APIKEY = 'stocks.alerts.apikey';
 
 let alerts = [];           // [{ id, ticker, price, direction, lastPrice, triggered }]
 let alertsTimer = null;
@@ -596,8 +597,8 @@ function loadAlerts() {
   try {
     alerts = JSON.parse(localStorage.getItem(LS_ALERTS) || '[]');
   } catch { alerts = []; }
-  const phone = localStorage.getItem(LS_PHONE) || '';
-  $('alertPhone').value = phone;
+  $('alertPhone').value = localStorage.getItem(LS_PHONE) || '';
+  $('alertApiKey').value = localStorage.getItem(LS_APIKEY) || '';
   renderAlerts();
 }
 
@@ -686,18 +687,38 @@ function buildAlertMessage(a, curr) {
   return `🔔 ${a.ticker} חצה ${dir} ${a.price}\nמחיר כעת: ${curr.toFixed(2)}\nזמן: ${new Date().toLocaleString('he-IL')}`;
 }
 
+// Send a WhatsApp message. If a CallMeBot apikey is set → fully automatic (GET request).
+// Otherwise fall back to opening wa.me (manual send). Returns a short status string.
+function sendWhatsApp(msg) {
+  const phone = ($('alertPhone').value || '').replace(/[^0-9]/g, '');
+  const apikey = ($('alertApiKey').value || '').trim();
+  if (!phone) return 'אין מספר טלפון';
+
+  if (apikey) {
+    // CallMeBot — automatic. Fire via no-cors fetch + Image beacon as backup.
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(msg)}&apikey=${encodeURIComponent(apikey)}`;
+    try {
+      fetch(url, { mode: 'no-cors' }).catch(() => {});
+    } catch {}
+    try {
+      const img = new Image();
+      img.src = url;
+    } catch {}
+    return 'נשלח דרך CallMeBot';
+  }
+
+  // No apikey → manual wa.me (may be popup-blocked if not from a click)
+  const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+  const w = window.open(url, '_blank');
+  return w ? 'נפתח חלון וואטסאפ (שלח ידנית)' : 'נחסם ע"י חוסם קופצים — הגדר מפתח CallMeBot';
+}
+
 function fireAlert(a, curr) {
   const msg = buildAlertMessage(a, curr);
-  // Desktop notification
   if ('Notification' in window && Notification.permission === 'granted') {
     try { new Notification('התראת מניה', { body: msg }); } catch {}
   }
-  // Open WhatsApp send link in new tab
-  const phone = ($('alertPhone').value || '').replace(/[^0-9]/g, '');
-  if (phone) {
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank');
-  }
+  sendWhatsApp(msg);
 }
 
 async function checkAlerts() {
@@ -744,6 +765,18 @@ $('alertPrice').addEventListener('keydown', (e) => { if (e.key === 'Enter') addA
 $('alertTicker').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAlert(); });
 $('alertPhone').addEventListener('change', () => {
   localStorage.setItem(LS_PHONE, $('alertPhone').value.trim());
+});
+$('alertApiKey').addEventListener('change', () => {
+  localStorage.setItem(LS_APIKEY, $('alertApiKey').value.trim());
+});
+$('testWhatsappBtn').addEventListener('click', () => {
+  // Persist current values first
+  localStorage.setItem(LS_PHONE, $('alertPhone').value.trim());
+  localStorage.setItem(LS_APIKEY, $('alertApiKey').value.trim());
+  const phone = ($('alertPhone').value || '').replace(/[^0-9]/g, '');
+  if (!phone) { alert('הקלד מספר טלפון (עם קוד מדינה, ללא +)'); return; }
+  const status = sendWhatsApp(`✅ הודעת בדיקה מסורק המניות · ${new Date().toLocaleString('he-IL')}`);
+  $('autoInfo').textContent = '📨 ' + status;
 });
 $('checkAlertsBtn').addEventListener('click', checkAlerts);
 $('enableNotifBtn').addEventListener('click', async () => {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>סורק מניות - MA / Volume / RSI</title>
-  <link rel="stylesheet" href="styles.css?v=16" />
+  <link rel="stylesheet" href="styles.css?v=17" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -191,9 +191,24 @@
       <span class="small">בדיקה אוטומטית כל 5 דקות בזמן שהאתר פתוח</span>
     </div>
     <div class="alerts-body">
+      <details class="callmebot-help">
+        <summary>איך מפעילים שליחה אוטומטית לוואטסאפ? (הגדרה חד-פעמית)</summary>
+        <ol>
+          <li>הוסף לאנשי הקשר בטלפון את המספר <b>+34 644 51 95 91</b> (שם כלשהו, למשל CallMeBot).</li>
+          <li>שלח לו בוואטסאפ את ההודעה: <b>I allow callmebot to send me messages</b></li>
+          <li>תקבל בתגובה <b>apikey</b> (מספר). הדבק אותו בשדה "מפתח CallMeBot" למטה.</li>
+          <li>לחץ "שלח הודעת בדיקה" כדי לוודא שזה עובד.</li>
+        </ol>
+        <p class="note">בלי מפתח — האתר רק יפתח עבורך חלון וואטסאפ עם הודעה מוכנה שתצטרך לשלוח ידנית (ועלול להיחסם ע"י חוסם הקופצים).</p>
+      </details>
       <div class="alert-row">
         <label>טלפון:</label>
         <input id="alertPhone" class="alert-phone" placeholder="972501234567 (עם קוד מדינה, ללא +)" autocomplete="off" />
+      </div>
+      <div class="alert-row">
+        <label>מפתח CallMeBot:</label>
+        <input id="alertApiKey" class="alert-phone" placeholder="apikey (אופציונלי, לשליחה אוטומטית)" autocomplete="off" />
+        <button id="testWhatsappBtn" type="button">שלח הודעת בדיקה</button>
       </div>
       <div class="alert-row">
         <input id="alertTicker" class="alert-ticker" placeholder="AAPL" autocomplete="off" />
@@ -215,6 +230,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

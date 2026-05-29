@@ -332,6 +332,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--text-soft);
 }
 .alerts-body { padding: 10px 12px; }
+.callmebot-help {
+  margin-bottom: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.callmebot-help summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+.callmebot-help ol {
+  margin: 8px 0 4px;
+  padding-inline-start: 18px;
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+.callmebot-help b { color: var(--text); }
+.callmebot-help .note {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 11px;
+}
 .alert-row {
   display: flex;
   gap: 8px;
